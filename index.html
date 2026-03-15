@@ -148,7 +148,7 @@ function FinanceApp(){
   const mob=useM();const[dark,setDark]=useState(true);const t=dark?T.dark:T.light;
   const[tab,setTab]=useState("dashboard");const[crypto,setCrypto]=useState(CS);const[stocks,setStocks]=useState(SS);const[subs,setSubs]=useState(SBS);const[expenses,setExpenses]=useState(ES);const[goals,setGoals]=useState(GS);const[re,setRE]=useState(RS);const[income,setIncome]=useState(IS);const[recurring,setRecurring]=useState(RCS);const[monthlyBudget,setMonthlyBudget]=useState(2000);const[alerts,setAlerts]=useState([]);const[nwHistory,setNwHistory]=useState(NWS);const[dashCards,setDashCards]=useState(DCARDS);const[catBudgets,setCatBudgets]=useState({Alimentation:400,Transport:200,Sorties:150,Shopping:200});
   const[currency,setCurrency]=useState("EUR");const[rates,setRates]=useState({EUR:1,USD:1.08,GBP:0.86});const[profile,setProfile]=useState({name:"",email:"",avatar:""});const[showOnboard,setShowOnboard]=useState(false);const[isOnline,setIsOnline]=useState(navigator.onLine);
-  const[coupleMode,setCoupleMode]=useState(false);const[roomCode,setRoomCode]=useState("");const[syncStatus,setSyncStatus]=useState("off");const[partnerName,setPartnerName]=useState("");const[sbUrl,setSbUrl]=useState("");const[sbKey,setSbKey]=useState("");const[lastSyncBy,setLastSyncBy]=useState("");const ignoreRemote=useRef(false);
+  const[coupleMode,setCoupleMode]=useState(false);const[roomCode,setRoomCode]=useState("");const[syncStatus,setSyncStatus]=useState("off");const[partnerName,setPartnerName]=useState("");const[sbUrl,setSbUrl]=useState("");const[sbKey,setSbKey]=useState("");const[lastSyncBy,setLastSyncBy]=useState("");const ignoreRemote=useRef(false);const[pullY,setPullY]=useState(0);const pullStart=useRef(0);
   const[cSt,setCSt]=useState("loading");const[sSt,setSSt]=useState("loading");const[modal,setModal]=useState(null);const[md,setMd]=useState({});const[cf,setCf]=useState(null);const[lastCU,setLastCU]=useState(null);const[lastSU,setLastSU]=useState(null);const[expSearch,setExpSearch]=useState("");const[expCat,setExpCat]=useState("Tout");const[dataLoaded,setDataLoaded]=useState(false);const[confettiId,setConfettiId]=useState(null);const[detailView,setDetailView]=useState(null);const[toasts,setToasts]=useState([]);const[showSearch,setShowSearch]=useState(false);const[showFAB,setShowFAB]=useState(false);const[rptMonth,setRptMonth]=useState(new Date().toISOString().slice(0,7));const[cmpMonth,setCmpMonth]=useState("");
   const cs=CURR[currency].s;const cr=rates[currency]||1;
   const fmtC=n=>(n*cr).toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+cs;
@@ -160,6 +160,29 @@ function FinanceApp(){
 
   // Online/offline
   useEffect(()=>{const on=()=>setIsOnline(true);const off=()=>setIsOnline(false);window.addEventListener("online",on);window.addEventListener("offline",off);return()=>{window.removeEventListener("online",on);window.removeEventListener("offline",off);};},[]);
+
+  // Auto-sync when app returns to foreground (crucial on iPhone)
+  useEffect(()=>{
+    if(!coupleMode||!roomCode)return;
+    const onVisible=async()=>{
+      if(document.visibilityState==="visible"){
+        setSyncStatus("syncing");
+        const cloud=await loadFromCloud(roomCode);
+        if(cloud&&cloud.data){
+          const who=cloud.updated_by||"";
+          if(who&&who!==(profile.name||"Moi")){
+            ignoreRemote.current=true;
+            applyData(cloud.data);await saveD(cloud.data);
+            setLastSyncBy(who);
+            toast("🔄 Mis à jour par "+who);
+          }
+        }
+        setSyncStatus("synced");
+      }
+    };
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>document.removeEventListener("visibilitychange",onVisible);
+  },[coupleMode,roomCode,profile.name]);
 
   // Persistence + Couple Sync
   const applyData=(d)=>{if(d.crypto)setCrypto(d.crypto);if(d.stocks)setStocks(d.stocks);if(d.subs)setSubs(d.subs);if(d.expenses)setExpenses(d.expenses);if(d.goals)setGoals(d.goals);if(d.re)setRE(d.re);if(d.income)setIncome(d.income);if(d.recurring)setRecurring(d.recurring);if(d.monthlyBudget)setMonthlyBudget(d.monthlyBudget);if(d.dark!==undefined)setDark(d.dark);if(d.alerts)setAlerts(d.alerts);if(d.nwHistory)setNwHistory(d.nwHistory);if(d.dashCards)setDashCards(d.dashCards);if(d.catBudgets)setCatBudgets(d.catBudgets);if(d.currency)setCurrency(d.currency);if(d.profile)setProfile(d.profile);};
@@ -240,6 +263,26 @@ function FinanceApp(){
     setCoupleMode(false);setRoomCode("");setSyncStatus("off");setLastSyncBy("");
     saveCouple({url:sbUrl,key:sbKey,code:"",active:false,partner:""});
     toast("Déconnecté du mode couple","info");
+  };
+  const manualSync=async()=>{
+    if(!coupleMode||!roomCode)return;
+    setSyncStatus("syncing");
+    // 1. Push local data to cloud
+    const blob=getDataBlob();
+    const pushOk=await syncToCloud(roomCode,blob,profile.name||"Moi");
+    // 2. Pull latest from cloud
+    const cloud=await loadFromCloud(roomCode);
+    if(cloud&&cloud.data){
+      const who=cloud.updated_by||"";
+      if(who&&who!==(profile.name||"Moi")){
+        ignoreRemote.current=true;
+        applyData(cloud.data);await saveD(cloud.data);
+        setLastSyncBy(who);
+        toast("🔄 Données de "+who+" récupérées");
+      }
+    }
+    setSyncStatus(pushOk?"synced":"error");
+    if(pushOk&&!(cloud&&cloud.data&&cloud.updated_by&&cloud.updated_by!==(profile.name||"Moi")))toast("✅ Synchronisé");
   };
 
   // Currency rates
@@ -502,7 +545,7 @@ function FinanceApp(){
     <link href={FONTS} rel="stylesheet"/>
     <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}@keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}@keyframes slideFromBottom{from{transform:translateY(100%)}to{transform:translateY(0)}}@keyframes confettiFall{0%{transform:translateY(0) rotate(0deg);opacity:1}100%{transform:translateY(400px) rotate(720deg);opacity:0}}@keyframes slideIn{from{transform:translateX(100px);opacity:0}to{transform:translateX(0);opacity:1}}@keyframes fadeOut{to{opacity:0}}@keyframes fabPop{from{transform:scale(0)}to{transform:scale(1)}}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:${t.border};border-radius:2px}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}body{margin:0;overscroll-behavior:none;background:${t.bg}}`}</style>
     <div style={{padding:mob?"12px 16px":"14px 20px",borderBottom:`1px solid ${t.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100,backdropFilter:"blur(16px)",background:t.headerBg,paddingTop:"max(12px,env(safe-area-inset-top))"}}>
-      <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:mob?28:32,height:mob?28:32,borderRadius:8,background:"linear-gradient(135deg,#00e5a0,#00b4d8)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Space Mono",fontWeight:700,fontSize:mob?12:14,color:"#0d1117"}}>F</div><span style={{fontFamily:"Space Mono",fontSize:mob?13:15,fontWeight:700}}>FinTrack<span style={{color:t.accent}}>.</span></span>{!isOnline&&<span style={{fontSize:10,color:t.orange,fontFamily:"Space Mono"}}>offline</span>}{coupleMode&&<span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"2px 8px",borderRadius:20,background:syncStatus==="synced"?t.green+"22":syncStatus==="syncing"?t.orange+"22":t.red+"22",fontSize:9,fontFamily:"Space Mono",fontWeight:700,color:syncStatus==="synced"?t.green:syncStatus==="syncing"?t.orange:t.red}}>{syncStatus==="synced"&&<span style={{width:5,height:5,borderRadius:"50%",background:t.green,animation:"pulse 1.5s infinite"}}/>}👫 {syncStatus==="synced"?"SYNC":syncStatus==="syncing"?"...":"ERR"}</span>}</div>
+      <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:mob?28:32,height:mob?28:32,borderRadius:8,background:"linear-gradient(135deg,#00e5a0,#00b4d8)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Space Mono",fontWeight:700,fontSize:mob?12:14,color:"#0d1117"}}>F</div><span style={{fontFamily:"Space Mono",fontSize:mob?13:15,fontWeight:700}}>FinTrack<span style={{color:t.accent}}>.</span></span>{!isOnline&&<span style={{fontSize:10,color:t.orange,fontFamily:"Space Mono"}}>offline</span>}{coupleMode&&<button onClick={manualSync} style={{display:"inline-flex",alignItems:"center",gap:3,padding:"2px 10px",borderRadius:20,background:syncStatus==="synced"?t.green+"22":syncStatus==="syncing"?t.orange+"22":t.red+"22",fontSize:9,fontFamily:"Space Mono",fontWeight:700,color:syncStatus==="synced"?t.green:syncStatus==="syncing"?t.orange:t.red,border:"none",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>{syncStatus==="syncing"?<span style={{animation:"pulse .8s infinite"}}>⟳</span>:<span style={{width:5,height:5,borderRadius:"50%",background:syncStatus==="synced"?t.green:t.red}}/>}👫 {syncStatus==="synced"?"SYNC":syncStatus==="syncing"?"...":"ERR"}</button>}</div>
       <div style={{display:"flex",alignItems:"center",gap:mob?4:8}}>
         <button onClick={()=>setShowSearch(true)} style={{background:"none",border:"none",fontSize:mob?16:18,cursor:"pointer",padding:4}}>🔍</button>
         <button onClick={()=>setModal("profile")} style={{background:"none",border:"none",cursor:"pointer",padding:2}}>{profile.avatar?<img src={profile.avatar} style={{width:26,height:26,borderRadius:13,objectFit:"cover"}}/>:<span style={{fontSize:mob?16:18}}>👤</span>}</button>
@@ -510,7 +553,13 @@ function FinanceApp(){
         {!mob&&<div style={{display:"flex",gap:2,background:t.card,borderRadius:10,padding:3,border:`1px solid ${t.border}`}}>{TABS.map(tt=>(<button key={tt.id} onClick={()=>setTab(tt.id)} style={{padding:"7px 12px",borderRadius:8,border:"none",background:tab===tt.id?t.border:"transparent",color:tab===tt.id?t.text:t.text3,fontFamily:"DM Sans",fontSize:12,fontWeight:500,cursor:"pointer"}}>{tt.label}</button>))}</div>}
       </div>
     </div>
-    <div style={{maxWidth:960,margin:"0 auto",padding:mob?"14px 12px":"20px 16px",animation:"slideUp .3s ease"}} key={tab+String(dark)}>{tab==="dashboard"&&renderDash()}{tab==="budget"&&renderBudget()}{tab==="invest"&&renderInvest()}{tab==="goals"&&renderGoals()}{tab==="report"&&renderReport()}</div>
+    {/* Pull-to-refresh indicator */}
+    {coupleMode&&pullY>30&&<div style={{position:"fixed",top:60,left:0,right:0,display:"flex",justifyContent:"center",zIndex:80,pointerEvents:"none"}}><div style={{background:t.card,border:`1px solid ${t.border}`,borderRadius:20,padding:"8px 16px",display:"flex",alignItems:"center",gap:6,boxShadow:"0 4px 16px rgba(0,0,0,0.3)"}}><span style={{fontSize:16,animation:pullY>80?"pulse .5s infinite":"none"}}>{pullY>80?"🔄":"⬇️"}</span><span style={{color:t.text,fontSize:12,fontWeight:600}}>{pullY>80?"Relâche pour sync":"Tire pour actualiser"}</span></div></div>}
+    <div style={{maxWidth:960,margin:"0 auto",padding:mob?"14px 12px":"20px 16px",animation:"slideUp .3s ease"}} key={tab+String(dark)}
+      onTouchStart={e=>{if(coupleMode&&window.scrollY<5)pullStart.current=e.touches[0].clientY;}}
+      onTouchMove={e=>{if(!coupleMode||pullStart.current===0)return;const dy=e.touches[0].clientY-pullStart.current;if(dy>0)setPullY(Math.min(120,dy));}}
+      onTouchEnd={()=>{if(pullY>80&&coupleMode){manualSync();}setPullY(0);pullStart.current=0;}}
+    >{tab==="dashboard"&&renderDash()}{tab==="budget"&&renderBudget()}{tab==="invest"&&renderInvest()}{tab==="goals"&&renderGoals()}{tab==="report"&&renderReport()}</div>
     <div style={{position:"fixed",bottom:mob?90:30,right:mob?16:30,zIndex:90,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>{showFAB&&<div style={{display:"flex",flexDirection:"column",gap:6,animation:"fabPop .2s ease"}}>{QCATS.map(cat=>(<button key={cat} onClick={()=>quickAddExp(cat)} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 16px",borderRadius:12,background:t.card,border:`1px solid ${t.border}`,color:t.text,fontSize:13,fontFamily:"DM Sans",cursor:"pointer",boxShadow:"0 4px 16px rgba(0,0,0,0.2)"}}><span style={{fontSize:16}}>{CI[cat]}</span>{cat}</button>))}</div>}<button onClick={()=>setShowFAB(p=>!p)} style={{width:56,height:56,borderRadius:28,background:"linear-gradient(135deg,#00e5a0,#00b4d8)",border:"none",color:"#0d1117",fontSize:24,cursor:"pointer",boxShadow:"0 4px 20px rgba(0,229,160,0.3)",display:"flex",alignItems:"center",justifyContent:"center",transition:"transform .2s",transform:showFAB?"rotate(45deg)":"none"}}>+</button></div>
     {mob&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:t.card+"ee",borderTop:`1px solid ${t.border}`,display:"flex",justifyContent:"space-around",padding:"6px 0 max(12px,env(safe-area-inset-bottom))",backdropFilter:"blur(16px)",zIndex:100}}>{TABS.map(tt=>(<button key={tt.id} onClick={()=>setTab(tt.id)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,background:"none",border:"none",cursor:"pointer",padding:"4px 6px",minWidth:44}}><span style={{fontSize:17,filter:tab===tt.id?"none":"grayscale(1) opacity(0.4)"}}>{tt.emoji}</span><span style={{fontSize:8,fontWeight:tab===tt.id?600:400,color:tab===tt.id?t.accent:t.text3}}>{tt.label}</span></button>))}</div>}
     <Toast toasts={toasts}/>
@@ -556,6 +605,7 @@ function FinanceApp(){
             {lastSyncBy&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{color:t.text2,fontSize:11}}>Dernière modif</span><span style={{color:t.text,fontSize:12}}>{lastSyncBy}</span></div>}
           </div>
           <Bt full danger t={t} onClick={disconnectCouple}>Se déconnecter du couple</Bt>
+          <Bt full t={t} onClick={manualSync} style={{marginTop:8}}>🔄 Forcer la synchronisation</Bt>
         </div>)}
       </div>
       <Bt full accent t={t} onClick={closeM} style={{marginTop:16}}>Enregistrer</Bt>
