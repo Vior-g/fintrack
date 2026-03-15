@@ -18,6 +18,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 html,body{margin:0;padding:0;overscroll-behavior:none;-webkit-overflow-scrolling:touch}
@@ -50,9 +51,34 @@ select,input{font-size:16px!important}
 const {useState,useEffect,useCallback,useRef,useMemo}=React;
 const FONTS="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap";
 const T={dark:{bg:"#0d1117",card:"#161b22",border:"#21262d",border2:"#30363d",text:"#f0f0f0",text2:"#8b949e",text3:"#484f58",input:"#0d1117",accent:"#00e5a0",accent2:"#00b4d8",red:"#f85149",orange:"#f4a261",purple:"#9b5de5",green:"#00e5a0",blue:"#00b4d8",gradCard:"linear-gradient(135deg,#161b22 0%,#1a2332 50%,#161b22 100%)",headerBg:"#0d1117dd",shadow:"none"},light:{bg:"#f6f8fa",card:"#ffffff",border:"#d0d7de",border2:"#d0d7de",text:"#1f2328",text2:"#656d76",text3:"#8b949e",input:"#f6f8fa",accent:"#00a67e",accent2:"#0969da",red:"#cf222e",orange:"#d4760a",purple:"#8250df",green:"#1a7f37",blue:"#0969da",gradCard:"linear-gradient(135deg,#fff 0%,#f0f6ff 50%,#fff 100%)",headerBg:"#ffffffdd",shadow:"0 1px 3px rgba(0,0,0,0.08)"}};
-const SK="fintrack-v8";
+const SK="fintrack-v8";const COUPLE_SK="fintrack-couple";
 async function saveD(d){try{localStorage.setItem(SK,JSON.stringify(d));}catch(e){}}
 async function loadD(){try{const r=localStorage.getItem(SK);return r?JSON.parse(r):null;}catch(e){return null;}}
+function loadCouple(){try{const r=localStorage.getItem(COUPLE_SK);return r?JSON.parse(r):null;}catch(e){return null;}}
+function saveCouple(d){try{localStorage.setItem(COUPLE_SK,JSON.stringify(d));}catch(e){}}
+
+// ── Supabase Sync Engine ──
+let _sb=null;let _channel=null;
+function getSB(url,key){if(_sb)return _sb;if(!url||!key)return null;try{_sb=supabase.createClient(url,key);return _sb;}catch(e){return null;}}
+
+async function syncToCloud(code,data,who){
+  const c=loadCouple();if(!c||!c.url||!c.key||!code)return false;
+  const sb=getSB(c.url,c.key);if(!sb)return false;
+  try{const{error}=await sb.from("rooms").upsert({code,data,updated_by:who||"?",updated_at:new Date().toISOString()},{onConflict:"code"});return !error;}catch(e){return false;}
+}
+async function loadFromCloud(code){
+  const c=loadCouple();if(!c||!c.url||!c.key||!code)return null;
+  const sb=getSB(c.url,c.key);if(!sb)return null;
+  try{const{data,error}=await sb.from("rooms").select("data,updated_by,updated_at").eq("code",code).single();if(error||!data)return null;return data;}catch(e){return null;}
+}
+function subscribeToRoom(code,onChange){
+  const c=loadCouple();if(!c||!c.url||!c.key||!code)return null;
+  const sb=getSB(c.url,c.key);if(!sb)return null;
+  if(_channel){_channel.unsubscribe();_channel=null;}
+  _channel=sb.channel("room-"+code).on("postgres_changes",{event:"UPDATE",schema:"public",table:"rooms",filter:`code=eq.${code}`},(payload)=>{if(payload.new&&payload.new.data){onChange(payload.new.data,payload.new.updated_by);}}).subscribe();
+  return _channel;
+}
+function genRoomCode(){return String(100000+Math.floor(Math.random()*899999));}
 const CURR={EUR:{s:"€",r:1},USD:{s:"$",r:1.08},GBP:{s:"£",r:0.86}};
 async function fetchRates(){try{const r=await fetch("https://api.exchangerate-api.com/v4/latest/EUR",{signal:AbortSignal.timeout(8000)});if(!r.ok)throw new Error();const d=await r.json();return{EUR:1,USD:d.rates.USD||1.08,GBP:d.rates.GBP||0.86};}catch(e){return{EUR:1,USD:1.08,GBP:0.86};}}
 const CS=[{id:"bitcoin",symbol:"BTC",name:"Bitcoin",price:0,change:0,held:0.45,avgBuy:42000,icon:"₿",sparkline:[]},{id:"ethereum",symbol:"ETH",name:"Ethereum",price:0,change:0,held:3.2,avgBuy:2200,icon:"Ξ",sparkline:[]},{id:"solana",symbol:"SOL",name:"Solana",price:0,change:0,held:25,avgBuy:85,icon:"◎",sparkline:[]},{id:"cardano",symbol:"ADA",name:"Cardano",price:0,change:0,held:5000,avgBuy:0.35,icon:"₳",sparkline:[]}];
@@ -113,6 +139,7 @@ function FinanceApp(){
   const mob=useM();const[dark,setDark]=useState(true);const t=dark?T.dark:T.light;
   const[tab,setTab]=useState("dashboard");const[crypto,setCrypto]=useState(CS);const[stocks,setStocks]=useState(SS);const[subs,setSubs]=useState(SBS);const[expenses,setExpenses]=useState(ES);const[goals,setGoals]=useState(GS);const[re,setRE]=useState(RS);const[income,setIncome]=useState(IS);const[recurring,setRecurring]=useState(RCS);const[monthlyBudget,setMonthlyBudget]=useState(2000);const[alerts,setAlerts]=useState([]);const[nwHistory,setNwHistory]=useState(NWS);const[dashCards,setDashCards]=useState(DCARDS);const[catBudgets,setCatBudgets]=useState({Alimentation:400,Transport:200,Sorties:150,Shopping:200});
   const[currency,setCurrency]=useState("EUR");const[rates,setRates]=useState({EUR:1,USD:1.08,GBP:0.86});const[profile,setProfile]=useState({name:"",email:"",avatar:""});const[showOnboard,setShowOnboard]=useState(false);const[isOnline,setIsOnline]=useState(navigator.onLine);
+  const[coupleMode,setCoupleMode]=useState(false);const[roomCode,setRoomCode]=useState("");const[syncStatus,setSyncStatus]=useState("off");const[partnerName,setPartnerName]=useState("");const[sbUrl,setSbUrl]=useState("");const[sbKey,setSbKey]=useState("");const[lastSyncBy,setLastSyncBy]=useState("");const ignoreRemote=useRef(false);
   const[cSt,setCSt]=useState("loading");const[sSt,setSSt]=useState("loading");const[modal,setModal]=useState(null);const[md,setMd]=useState({});const[cf,setCf]=useState(null);const[lastCU,setLastCU]=useState(null);const[lastSU,setLastSU]=useState(null);const[expSearch,setExpSearch]=useState("");const[expCat,setExpCat]=useState("Tout");const[dataLoaded,setDataLoaded]=useState(false);const[confettiId,setConfettiId]=useState(null);const[detailView,setDetailView]=useState(null);const[toasts,setToasts]=useState([]);const[showSearch,setShowSearch]=useState(false);const[showFAB,setShowFAB]=useState(false);const[rptMonth,setRptMonth]=useState(new Date().toISOString().slice(0,7));const[cmpMonth,setCmpMonth]=useState("");
   const cs=CURR[currency].s;const cr=rates[currency]||1;
   const fmtC=n=>(n*cr).toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+cs;
@@ -125,9 +152,69 @@ function FinanceApp(){
   // Online/offline
   useEffect(()=>{const on=()=>setIsOnline(true);const off=()=>setIsOnline(false);window.addEventListener("online",on);window.addEventListener("offline",off);return()=>{window.removeEventListener("online",on);window.removeEventListener("offline",off);};},[]);
 
-  // Persistence
-  useEffect(()=>{(async()=>{const d=await loadD();if(d){if(d.crypto)setCrypto(d.crypto);if(d.stocks)setStocks(d.stocks);if(d.subs)setSubs(d.subs);if(d.expenses)setExpenses(d.expenses);if(d.goals)setGoals(d.goals);if(d.re)setRE(d.re);if(d.income)setIncome(d.income);if(d.recurring)setRecurring(d.recurring);if(d.monthlyBudget)setMonthlyBudget(d.monthlyBudget);if(d.dark!==undefined)setDark(d.dark);if(d.alerts)setAlerts(d.alerts);if(d.nwHistory)setNwHistory(d.nwHistory);if(d.dashCards)setDashCards(d.dashCards);if(d.catBudgets)setCatBudgets(d.catBudgets);if(d.currency)setCurrency(d.currency);if(d.profile)setProfile(d.profile);setShowOnboard(false);}else{setShowOnboard(true);}setDataLoaded(true);})();},[]);
-  const svT=useRef(null);useEffect(()=>{if(!dataLoaded)return;if(svT.current)clearTimeout(svT.current);svT.current=setTimeout(()=>saveD({crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile}),500);},[crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile,dataLoaded]);
+  // Persistence + Couple Sync
+  const applyData=(d)=>{if(d.crypto)setCrypto(d.crypto);if(d.stocks)setStocks(d.stocks);if(d.subs)setSubs(d.subs);if(d.expenses)setExpenses(d.expenses);if(d.goals)setGoals(d.goals);if(d.re)setRE(d.re);if(d.income)setIncome(d.income);if(d.recurring)setRecurring(d.recurring);if(d.monthlyBudget)setMonthlyBudget(d.monthlyBudget);if(d.dark!==undefined)setDark(d.dark);if(d.alerts)setAlerts(d.alerts);if(d.nwHistory)setNwHistory(d.nwHistory);if(d.dashCards)setDashCards(d.dashCards);if(d.catBudgets)setCatBudgets(d.catBudgets);if(d.currency)setCurrency(d.currency);if(d.profile)setProfile(d.profile);};
+  const getDataBlob=()=>({crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile});
+
+  // Load on mount
+  useEffect(()=>{(async()=>{
+    // Load couple settings
+    const cp=loadCouple();
+    if(cp){if(cp.url)setSbUrl(cp.url);if(cp.key)setSbKey(cp.key);if(cp.code)setRoomCode(cp.code);if(cp.active)setCoupleMode(true);if(cp.partner)setPartnerName(cp.partner);}
+    // Load local data first
+    const d=await loadD();
+    if(d){applyData(d);setShowOnboard(false);}else{setShowOnboard(true);}
+    // If couple mode, try to load from cloud
+    if(cp&&cp.active&&cp.code){
+      setSyncStatus("syncing");
+      const cloud=await loadFromCloud(cp.code);
+      if(cloud&&cloud.data){applyData(cloud.data);setLastSyncBy(cloud.updated_by||"");setSyncStatus("synced");}
+      else{setSyncStatus("error");}
+    }
+    setDataLoaded(true);
+  })();},[]);
+
+  // Save locally + sync to cloud
+  const svT=useRef(null);useEffect(()=>{if(!dataLoaded)return;if(ignoreRemote.current){ignoreRemote.current=false;return;}if(svT.current)clearTimeout(svT.current);svT.current=setTimeout(async()=>{const blob=getDataBlob();await saveD(blob);if(coupleMode&&roomCode){setSyncStatus("syncing");const ok=await syncToCloud(roomCode,blob,profile.name||"Moi");setSyncStatus(ok?"synced":"error");}},600);},[crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile,dataLoaded,coupleMode,roomCode]);
+
+  // Realtime subscription
+  useEffect(()=>{if(!coupleMode||!roomCode||!sbUrl||!sbKey)return;
+    const myName=profile.name||"Moi";
+    const ch=subscribeToRoom(roomCode,(data,who)=>{
+      if(who===myName)return; // ignore own updates
+      ignoreRemote.current=true;
+      applyData(data);saveD(data);setLastSyncBy(who||"Partenaire");setSyncStatus("synced");
+      toast("🔄 Sync : "+who+" a modifié","info");
+    });
+    if(ch)setSyncStatus("synced");
+    return()=>{if(_channel){_channel.unsubscribe();_channel=null;}};
+  },[coupleMode,roomCode,sbUrl,sbKey]);
+
+  // Couple actions
+  const createRoom=async()=>{
+    if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé Supabase","error");return;}
+    const code=genRoomCode();const sb=getSB(sbUrl,sbKey);if(!sb){toast("Erreur connexion Supabase","error");return;}
+    const blob=getDataBlob();
+    const{error}=await sb.from("rooms").insert({code,data:blob,updated_by:profile.name||"Créateur"});
+    if(error){toast("Erreur: "+error.message,"error");return;}
+    setRoomCode(code);setCoupleMode(true);saveCouple({url:sbUrl,key:sbKey,code,active:true,partner:partnerName});
+    setSyncStatus("synced");toast("✅ Salon créé : "+code);
+  };
+  const joinRoom=async(code)=>{
+    if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé Supabase","error");return;}
+    if(!code||code.length<4){toast("Code invalide","error");return;}
+    const cloud=await loadFromCloud(code);
+    if(!cloud){toast("Salon introuvable","error");return;}
+    if(cloud.data)applyData(cloud.data);
+    setRoomCode(code);setCoupleMode(true);saveCouple({url:sbUrl,key:sbKey,code,active:true,partner:partnerName});
+    setSyncStatus("synced");toast("✅ Rejoint le salon "+code);
+  };
+  const disconnectCouple=()=>{
+    if(_channel){_channel.unsubscribe();_channel=null;}
+    setCoupleMode(false);setRoomCode("");setSyncStatus("off");setLastSyncBy("");
+    saveCouple({url:sbUrl,key:sbKey,code:"",active:false,partner:""});
+    toast("Déconnecté du mode couple","info");
+  };
 
   // Currency rates
   useEffect(()=>{fetchRates().then(r=>setRates(r));},[]);
@@ -389,7 +476,7 @@ function FinanceApp(){
     <link href={FONTS} rel="stylesheet"/>
     <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}@keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}@keyframes slideFromBottom{from{transform:translateY(100%)}to{transform:translateY(0)}}@keyframes confettiFall{0%{transform:translateY(0) rotate(0deg);opacity:1}100%{transform:translateY(400px) rotate(720deg);opacity:0}}@keyframes slideIn{from{transform:translateX(100px);opacity:0}to{transform:translateX(0);opacity:1}}@keyframes fadeOut{to{opacity:0}}@keyframes fabPop{from{transform:scale(0)}to{transform:scale(1)}}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:${t.border};border-radius:2px}input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}body{margin:0;overscroll-behavior:none;background:${t.bg}}`}</style>
     <div style={{padding:mob?"12px 16px":"14px 20px",borderBottom:`1px solid ${t.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:100,backdropFilter:"blur(16px)",background:t.headerBg,paddingTop:"max(12px,env(safe-area-inset-top))"}}>
-      <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:mob?28:32,height:mob?28:32,borderRadius:8,background:"linear-gradient(135deg,#00e5a0,#00b4d8)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Space Mono",fontWeight:700,fontSize:mob?12:14,color:"#0d1117"}}>F</div><span style={{fontFamily:"Space Mono",fontSize:mob?13:15,fontWeight:700}}>FinTrack<span style={{color:t.accent}}>.</span></span>{!isOnline&&<span style={{fontSize:10,color:t.orange,fontFamily:"Space Mono"}}>offline</span>}</div>
+      <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:mob?28:32,height:mob?28:32,borderRadius:8,background:"linear-gradient(135deg,#00e5a0,#00b4d8)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Space Mono",fontWeight:700,fontSize:mob?12:14,color:"#0d1117"}}>F</div><span style={{fontFamily:"Space Mono",fontSize:mob?13:15,fontWeight:700}}>FinTrack<span style={{color:t.accent}}>.</span></span>{!isOnline&&<span style={{fontSize:10,color:t.orange,fontFamily:"Space Mono"}}>offline</span>}{coupleMode&&<span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"2px 8px",borderRadius:20,background:syncStatus==="synced"?t.green+"22":syncStatus==="syncing"?t.orange+"22":t.red+"22",fontSize:9,fontFamily:"Space Mono",fontWeight:700,color:syncStatus==="synced"?t.green:syncStatus==="syncing"?t.orange:t.red}}>{syncStatus==="synced"&&<span style={{width:5,height:5,borderRadius:"50%",background:t.green,animation:"pulse 1.5s infinite"}}/>}👫 {syncStatus==="synced"?"SYNC":syncStatus==="syncing"?"...":"ERR"}</span>}</div>
       <div style={{display:"flex",alignItems:"center",gap:mob?4:8}}>
         <button onClick={()=>setShowSearch(true)} style={{background:"none",border:"none",fontSize:mob?16:18,cursor:"pointer",padding:4}}>🔍</button>
         <button onClick={()=>setModal("profile")} style={{background:"none",border:"none",cursor:"pointer",padding:2}}>{profile.avatar?<img src={profile.avatar} style={{width:26,height:26,borderRadius:13,objectFit:"cover"}}/>:<span style={{fontSize:mob?16:18}}>👤</span>}</button>
@@ -414,7 +501,37 @@ function FinanceApp(){
       <Fd label="Email" type="email" placeholder="jean@exemple.fr" value={profile.email||""} onChange={e=>setProfile(p=>({...p,email:e.target.value}))} t={t}/>
       <div style={{marginBottom:14}}><label style={{color:t.text2,fontSize:12,display:"block",marginBottom:4}}>Devise</label><div style={{display:"flex",gap:8}}>{Object.keys(CURR).map(c=>(<button key={c} onClick={()=>setCurrency(c)} style={{flex:1,padding:"12px",borderRadius:10,border:`2px solid ${currency===c?t.accent:t.border}`,background:currency===c?t.accent+"22":"transparent",color:currency===c?t.accent:t.text,fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:"Space Mono"}}>{CURR[c].s} {c}</button>))}</div></div>
       <div style={{marginBottom:14}}><label style={{color:t.text2,fontSize:12,display:"block",marginBottom:4}}>Thème</label><div style={{display:"flex",gap:8}}><button onClick={()=>setDark(true)} style={{flex:1,padding:12,borderRadius:10,border:`2px solid ${dark?t.accent:t.border}`,background:dark?t.accent+"22":"transparent",color:dark?t.accent:t.text,fontSize:14,cursor:"pointer"}}>🌙 Sombre</button><button onClick={()=>setDark(false)} style={{flex:1,padding:12,borderRadius:10,border:`2px solid ${!dark?t.accent:t.border}`,background:!dark?t.accent+"22":"transparent",color:!dark?t.accent:t.text,fontSize:14,cursor:"pointer"}}>☀️ Clair</button></div></div>
-      <Bt full accent t={t} onClick={closeM} style={{marginTop:8}}>Enregistrer</Bt>
+      {/* ── Couple Mode ── */}
+      <div style={{borderTop:`1px solid ${t.border}`,marginTop:20,paddingTop:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:14}}><span style={{fontSize:20}}>👫</span><span style={{color:t.text,fontSize:15,fontWeight:700}}>Mode Couple</span>{coupleMode&&<span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"2px 8px",borderRadius:20,background:t.green+"22",fontSize:9,fontFamily:"Space Mono",fontWeight:700,color:t.green}}><span style={{width:5,height:5,borderRadius:"50%",background:t.green,animation:"pulse 1.5s infinite"}}/>Connecté</span>}</div>
+        <Fd label="URL Supabase" placeholder="https://xxx.supabase.co" value={sbUrl} onChange={e=>{setSbUrl(e.target.value);_sb=null;}} t={t}/>
+        <Fd label="Clé API (anon public)" placeholder="eyJ..." value={sbKey} onChange={e=>{setSbKey(e.target.value);_sb=null;}} t={t}/>
+        {!coupleMode?(<div>
+          <Fd label="Nom du partenaire" placeholder="Marie" value={partnerName} onChange={e=>setPartnerName(e.target.value)} t={t}/>
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
+            <Bt full accent t={t} onClick={createRoom}>Créer un salon</Bt>
+          </div>
+          <div style={{color:t.text2,fontSize:11,textAlign:"center",marginBottom:8}}>— ou rejoindre un salon existant —</div>
+          <div style={{display:"flex",gap:8}}>
+            <input placeholder="Code à 6 chiffres" value={md.joinCode||""} onChange={e=>setMd(p=>({...p,joinCode:e.target.value}))} style={{flex:1,padding:12,background:t.input,border:`1px solid ${t.border2}`,borderRadius:10,color:t.text,fontSize:16,fontFamily:"Space Mono",textAlign:"center",outline:"none",letterSpacing:4}}/>
+            <Bt accent t={t} onClick={()=>joinRoom(md.joinCode)}>Rejoindre</Bt>
+          </div>
+        </div>):(<div>
+          <div style={{background:t.input,borderRadius:12,padding:16,border:`1px solid ${t.border}`,marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <span style={{color:t.text2,fontSize:11}}>Code du salon</span>
+              <span style={{fontFamily:"Space Mono",fontSize:22,fontWeight:700,color:t.accent,letterSpacing:4}}>{roomCode}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <span style={{color:t.text2,fontSize:11}}>Statut</span>
+              <span style={{fontSize:12,color:syncStatus==="synced"?t.green:t.orange}}>{syncStatus==="synced"?"✅ Synchronisé":syncStatus==="syncing"?"⏳ Synchronisation...":"❌ Erreur"}</span>
+            </div>
+            {lastSyncBy&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{color:t.text2,fontSize:11}}>Dernière modif</span><span style={{color:t.text,fontSize:12}}>{lastSyncBy}</span></div>}
+          </div>
+          <Bt full danger t={t} onClick={disconnectCouple}>Se déconnecter du couple</Bt>
+        </div>)}
+      </div>
+      <Bt full accent t={t} onClick={closeM} style={{marginTop:16}}>Enregistrer</Bt>
     </Modal>
     {/* Bank sim */}
     <Modal open={modal==="bankSim"} onClose={closeM} title="🏦 Connexion bancaire" mobile={mob} t={t}>
