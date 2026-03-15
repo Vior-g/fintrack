@@ -149,99 +149,87 @@ function FinanceApp(){
 
   const lastSeenCloud=useRef("");const isSyncing=useRef(false);const skipNextPush=useRef(false);
 
-  // ── Pull from cloud (fetch partner's changes) ──
+  // ── Apply data from any source (local or cloud) ──
+  const applyData=(d,keepPrices)=>{
+    if(d.subs)setSubs(d.subs);if(d.expenses)setExpenses(d.expenses);if(d.goals)setGoals(d.goals);
+    if(d.re)setRE(d.re);if(d.income)setIncome(d.income);if(d.recurring)setRecurring(d.recurring);
+    if(d.monthlyBudget)setMonthlyBudget(d.monthlyBudget);if(d.alerts)setAlerts(d.alerts);
+    if(d.nwHistory)setNwHistory(d.nwHistory);if(d.dashCards)setDashCards(d.dashCards);
+    if(d.catBudgets)setCatBudgets(d.catBudgets);
+    if(d.dark!==undefined)setDark(d.dark);if(d.currency)setCurrency(d.currency);if(d.profile)setProfile(d.profile);
+    // For crypto/stocks: if keepPrices, merge holdings but keep local prices
+    if(keepPrices&&d.crypto){setCrypto(prev=>{return d.crypto.map(dc=>{const local=prev.find(c=>c.id===dc.id);return{...dc,price:local?.price||dc.price,sparkline:local?.sparkline?.length?local.sparkline:dc.sparkline,change:local?.change||dc.change};});});}else if(d.crypto){setCrypto(d.crypto);}
+    if(keepPrices&&d.stocks){setStocks(prev=>{return d.stocks.map(ds=>{const local=prev.find(s=>s.symbol===ds.symbol);return{...ds,price:local?.price||ds.price,history:local?.history?.length?local.history:ds.history,change:local?.change||ds.change};});});}else if(d.stocks){setStocks(d.stocks);}
+  };
+  const getBlob=()=>({crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile});
+
+  // ── PULL partner changes ──
   const pullFromCloud=useCallback(async(silent)=>{
     if(!coupleMode||!roomCode||isSyncing.current)return false;
-    isSyncing.current=true;
-    if(!silent)setSyncStatus("syncing");
+    isSyncing.current=true;if(!silent)setSyncStatus("syncing");
     const cloud=await cloudPull(roomCode);
     isSyncing.current=false;
     if(!cloud||!cloud.data){setSyncStatus("synced");return false;}
-    // Skip if we already saw this version
-    const cloudStamp=cloud.updated_at||"";
-    if(cloudStamp===lastSeenCloud.current){setSyncStatus("synced");return false;}
-    // Skip if WE were the last to update
-    const myName=profile.name||"Moi";
-    if(cloud.updated_by===myName){lastSeenCloud.current=cloudStamp;setSyncStatus("synced");return false;}
-    // Apply partner's changes
-    lastSeenCloud.current=cloudStamp;
-    skipNextPush.current=true;
-    applyData(cloud.data);saveD(cloud.data);
-    setLastSyncBy(cloud.updated_by||"Partenaire");
-    setSyncStatus("synced");
-    if(!silent)toast("🔄 Données de "+(cloud.updated_by||"partenaire")+" appliquées");
+    const stamp=cloud.updated_at||"";
+    if(stamp===lastSeenCloud.current){setSyncStatus("synced");return false;}
+    if(cloud.updated_by===(profile.name||"Moi")){lastSeenCloud.current=stamp;setSyncStatus("synced");return false;}
+    // Apply partner changes (keep our live prices)
+    lastSeenCloud.current=stamp;skipNextPush.current=true;
+    applyData(cloud.data,true);
+    setLastSyncBy(cloud.updated_by||"Partenaire");setSyncStatus("synced");
+    if(!silent)toast("🔄 "+(cloud.updated_by||"Partenaire")+" a modifié");
     return true;
   },[coupleMode,roomCode,profile.name]);
 
-  // ── Push local data to cloud ──
+  // ── PUSH our data ──
   const pushToCloud=useCallback(async()=>{
     if(!coupleMode||!roomCode||isSyncing.current)return;
     isSyncing.current=true;
-    const blob=getSharedBlob();
-    const ok=await cloudPush(roomCode,blob,profile.name||"Moi");
+    const ok=await cloudPush(roomCode,getBlob(),profile.name||"Moi");
     isSyncing.current=false;
     if(ok)lastSeenCloud.current=new Date().toISOString();
     setSyncStatus(ok?"synced":"error");
   },[coupleMode,roomCode,profile.name]);
 
-  // ── Manual sync button: PULL first (get partner changes), then PUSH ──
+  // ── Manual sync: pull then push ──
   const manualSync=useCallback(async()=>{
-    if(!coupleMode||!roomCode){toast("Mode couple non activé","info");return;}
+    if(!coupleMode||!roomCode){toast("Pas connecté","info");return;}
     setSyncStatus("syncing");
-    // Pull first = partner's data wins if they changed something
-    const gotNew=await pullFromCloud(false);
-    // Then push our (potentially updated) state
-    if(!gotNew){
-      await pushToCloud();
-      toast("✅ Synchronisé");
-    }
+    const got=await pullFromCloud(false);
+    if(!got){await pushToCloud();toast("✅ À jour");}
   },[coupleMode,roomCode,pullFromCloud,pushToCloud]);
 
-  // Auto-sync on foreground return
-  useEffect(()=>{
-    if(!coupleMode||!roomCode)return;
-    const onVisible=()=>{if(document.visibilityState==="visible")pullFromCloud(true);};
-    document.addEventListener("visibilitychange",onVisible);
-    return()=>document.removeEventListener("visibilitychange",onVisible);
-  },[coupleMode,roomCode,pullFromCloud]);
+  // Auto foreground sync
+  useEffect(()=>{if(!coupleMode||!roomCode)return;const h=()=>{if(document.visibilityState==="visible")pullFromCloud(true);};document.addEventListener("visibilitychange",h);return()=>document.removeEventListener("visibilitychange",h);},[coupleMode,roomCode,pullFromCloud]);
+  // Auto poll 15s
+  useEffect(()=>{if(!coupleMode||!roomCode)return;const iv=setInterval(()=>pullFromCloud(true),15000);return()=>clearInterval(iv);},[coupleMode,roomCode,pullFromCloud]);
 
-  // Auto-poll every 15s (silent)
-  useEffect(()=>{
-    if(!coupleMode||!roomCode)return;
-    const iv=setInterval(()=>pullFromCloud(true),15000);
-    return()=>clearInterval(iv);
-  },[coupleMode,roomCode,pullFromCloud]);
-
-  // ── Data helpers ──
-  const applyData=(d)=>{if(d.crypto)setCrypto(d.crypto);if(d.stocks)setStocks(d.stocks);if(d.subs)setSubs(d.subs);if(d.expenses)setExpenses(d.expenses);if(d.goals)setGoals(d.goals);if(d.re)setRE(d.re);if(d.income)setIncome(d.income);if(d.recurring)setRecurring(d.recurring);if(d.monthlyBudget)setMonthlyBudget(d.monthlyBudget);if(d.alerts)setAlerts(d.alerts);if(d.nwHistory)setNwHistory(d.nwHistory);if(d.dashCards)setDashCards(d.dashCards);if(d.catBudgets)setCatBudgets(d.catBudgets);};
-  // Shared blob: only user data, NOT live prices, NOT personal UI prefs
-  const getSharedBlob=()=>({crypto:crypto.map(c=>({...c,price:0,sparkline:[]})),stocks:stocks.map(s=>({...s,price:0,history:[]})),subs,expenses,goals,re,income,recurring,monthlyBudget,alerts,nwHistory,dashCards,catBudgets});
-  const getFullBlob=()=>({crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile});
-
-  // Load on mount
+  // ── Load on mount ──
   useEffect(()=>{(async()=>{
-    // Load couple settings
     const cp=loadCouple();
     if(cp){if(cp.url)setSbUrl(cp.url);if(cp.key)setSbKey(cp.key);if(cp.code)setRoomCode(cp.code);if(cp.active)setCoupleMode(true);if(cp.partner)setPartnerName(cp.partner);}
-    // Load local data first
     const d=await loadD();
-    if(d){applyData(d);setShowOnboard(false);}else{setShowOnboard(true);}
-    // If couple mode, try to load from cloud
+    if(d){applyData(d,false);setShowOnboard(false);}else{setShowOnboard(true);}
+    // After local load, try cloud (keep local prices)
     if(cp&&cp.active&&cp.code){
       setSyncStatus("syncing");
       const cloud=await cloudPull(cp.code);
-      if(cloud&&cloud.data){applyData(cloud.data);setLastSyncBy(cloud.updated_by||"");setSyncStatus("synced");}
-      else{setSyncStatus("error");}
+      if(cloud&&cloud.data){
+        const who=cloud.updated_by||"";
+        if(who&&who!==(d?.profile?.name||"Moi")){applyData(cloud.data,true);setLastSyncBy(who);}
+        lastSeenCloud.current=cloud.updated_at||"";
+        setSyncStatus("synced");
+      }else{setSyncStatus("synced");}
     }
     setDataLoaded(true);
   })();},[]);
 
-  // Save locally always. Push to cloud only when user changes data (not price updates, not remote apply).
-  const svT=useRef(null);const userDataDeps=[subs,expenses,goals,re,income,recurring,monthlyBudget,alerts,nwHistory,dashCards,catBudgets];
-  // Save everything locally (including live prices for offline use)
-  useEffect(()=>{if(!dataLoaded)return;if(svT.current)clearTimeout(svT.current);svT.current=setTimeout(()=>saveD(getFullBlob()),500);},[crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile,dataLoaded]);
-  // Push to cloud only when user-editable data changes (not live prices)
-  const cloudT=useRef(null);useEffect(()=>{if(!dataLoaded||!coupleMode||!roomCode)return;if(skipNextPush.current){skipNextPush.current=false;return;}if(cloudT.current)clearTimeout(cloudT.current);cloudT.current=setTimeout(()=>pushToCloud(),1000);},[...userDataDeps,dataLoaded,coupleMode,roomCode]);
+  // ── Save locally (always, all data including prices) ──
+  const svT=useRef(null);
+  useEffect(()=>{if(!dataLoaded)return;if(svT.current)clearTimeout(svT.current);svT.current=setTimeout(()=>saveD(getBlob()),500);},[crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile,dataLoaded]);
+  // ── Push to cloud only on user-data changes (not price ticks) ──
+  const cloudT=useRef(null);
+  useEffect(()=>{if(!dataLoaded||!coupleMode||!roomCode)return;if(skipNextPush.current){skipNextPush.current=false;return;}if(cloudT.current)clearTimeout(cloudT.current);cloudT.current=setTimeout(()=>pushToCloud(),1500);},[subs,expenses,goals,re,income,recurring,monthlyBudget,alerts,nwHistory,dashCards,catBudgets,dataLoaded,coupleMode,roomCode]);
 
   // Couple actions
   const testConnection=async()=>{
@@ -261,7 +249,7 @@ function FinanceApp(){
     if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé Supabase","error");return;}
     _sb=null;const sb=getSB(sbUrl,sbKey);
     if(!sb){toast("❌ Impossible de se connecter. Recharge la page.","error");return;}
-    const code=genRoomCode();const blob=getSharedBlob();
+    const code=genRoomCode();const blob=getBlob();
     try{
       const{error}=await sb.from("rooms").insert({code,data:blob,updated_by:profile.name||"Créateur"});
       if(error){toast("❌ "+error.message,"error");return;}
