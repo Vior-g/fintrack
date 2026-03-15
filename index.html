@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>FinTrack</title>
+<title>FinTrack v9</title>
 <!-- iOS PWA -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -51,9 +51,9 @@ select,input{font-size:16px!important}
 const {useState,useEffect,useCallback,useRef,useMemo}=React;
 const FONTS="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap";
 const T={dark:{bg:"#0d1117",card:"#161b22",border:"#21262d",border2:"#30363d",text:"#f0f0f0",text2:"#8b949e",text3:"#484f58",input:"#0d1117",accent:"#00e5a0",accent2:"#00b4d8",red:"#f85149",orange:"#f4a261",purple:"#9b5de5",green:"#00e5a0",blue:"#00b4d8",gradCard:"linear-gradient(135deg,#161b22 0%,#1a2332 50%,#161b22 100%)",headerBg:"#0d1117dd",shadow:"none"},light:{bg:"#f6f8fa",card:"#ffffff",border:"#d0d7de",border2:"#d0d7de",text:"#1f2328",text2:"#656d76",text3:"#8b949e",input:"#f6f8fa",accent:"#00a67e",accent2:"#0969da",red:"#cf222e",orange:"#d4760a",purple:"#8250df",green:"#1a7f37",blue:"#0969da",gradCard:"linear-gradient(135deg,#fff 0%,#f0f6ff 50%,#fff 100%)",headerBg:"#ffffffdd",shadow:"0 1px 3px rgba(0,0,0,0.08)"}};
-const SK="fintrack-v8";const COUPLE_SK="fintrack-couple";
+const SK="fintrack-v9";const COUPLE_SK="fintrack-couple";
 async function saveD(d){try{localStorage.setItem(SK,JSON.stringify(d));}catch(e){}}
-async function loadD(){try{const r=localStorage.getItem(SK);return r?JSON.parse(r):null;}catch(e){return null;}}
+async function loadD(){try{let r=localStorage.getItem(SK);if(!r)r=localStorage.getItem("fintrack-v8");return r?JSON.parse(r):null;}catch(e){return null;}}
 function loadCouple(){try{const r=localStorage.getItem(COUPLE_SK);return r?JSON.parse(r):null;}catch(e){return null;}}
 function saveCouple(d){try{localStorage.setItem(COUPLE_SK,JSON.stringify(d));}catch(e){}}
 
@@ -134,7 +134,7 @@ function FinanceApp(){
   const mob=useM();const[dark,setDark]=useState(true);const t=dark?T.dark:T.light;
   const[tab,setTab]=useState("dashboard");const[crypto,setCrypto]=useState(CS);const[stocks,setStocks]=useState(SS);const[subs,setSubs]=useState(SBS);const[expenses,setExpenses]=useState(ES);const[goals,setGoals]=useState(GS);const[re,setRE]=useState(RS);const[income,setIncome]=useState(IS);const[recurring,setRecurring]=useState(RCS);const[monthlyBudget,setMonthlyBudget]=useState(2000);const[alerts,setAlerts]=useState([]);const[nwHistory,setNwHistory]=useState(NWS);const[dashCards,setDashCards]=useState(DCARDS);const[catBudgets,setCatBudgets]=useState({Alimentation:400,Transport:200,Sorties:150,Shopping:200});
   const[currency,setCurrency]=useState("EUR");const[rates,setRates]=useState({EUR:1,USD:1.08,GBP:0.86});const[profile,setProfile]=useState({name:"",email:"",avatar:""});const[showOnboard,setShowOnboard]=useState(false);const[isOnline,setIsOnline]=useState(navigator.onLine);
-  const[coupleMode,setCoupleMode]=useState(false);const[roomCode,setRoomCode]=useState("");const[syncStatus,setSyncStatus]=useState("off");const[partnerName,setPartnerName]=useState("");const[sbUrl,setSbUrl]=useState("");const[sbKey,setSbKey]=useState("");const[lastSyncBy,setLastSyncBy]=useState("");const[pullY,setPullY]=useState(0);const pullStart=useRef(0);const mainRef=useRef(null);const pullActive=useRef(false);
+  const[coupleMode,setCoupleMode]=useState(false);const[roomCode,setRoomCode]=useState("");const[syncStatus,setSyncStatus]=useState("off");const[partnerName,setPartnerName]=useState("");const[sbUrl,setSbUrl]=useState("");const[sbKey,setSbKey]=useState("");const[lastSyncBy,setLastSyncBy]=useState("");
   const[cSt,setCSt]=useState("loading");const[sSt,setSSt]=useState("loading");const[modal,setModal]=useState(null);const[md,setMd]=useState({});const[cf,setCf]=useState(null);const[lastCU,setLastCU]=useState(null);const[lastSU,setLastSU]=useState(null);const[expSearch,setExpSearch]=useState("");const[expCat,setExpCat]=useState("Tout");const[dataLoaded,setDataLoaded]=useState(false);const[confettiId,setConfettiId]=useState(null);const[detailView,setDetailView]=useState(null);const[toasts,setToasts]=useState([]);const[showSearch,setShowSearch]=useState(false);const[showFAB,setShowFAB]=useState(false);const[rptMonth,setRptMonth]=useState(new Date().toISOString().slice(0,7));const[cmpMonth,setCmpMonth]=useState("");
   const cs=CURR[currency].s;const cr=rates[currency]||1;
   const fmtC=n=>(n*cr).toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+cs;
@@ -147,59 +147,76 @@ function FinanceApp(){
   // Online/offline
   useEffect(()=>{const on=()=>setIsOnline(true);const off=()=>setIsOnline(false);window.addEventListener("online",on);window.addEventListener("offline",off);return()=>{window.removeEventListener("online",on);window.removeEventListener("offline",off);};},[]);
 
-  // Auto-sync when app returns to foreground (iPhone wakes up)
-  const lastPullTime=useRef(0);
+  const lastSeenCloud=useRef("");const isSyncing=useRef(false);const skipNextPush=useRef(false);
+
+  // ── Pull from cloud (fetch partner's changes) ──
   const pullFromCloud=useCallback(async(silent)=>{
-    if(!coupleMode||!roomCode)return;
-    const now=Date.now();if(now-lastPullTime.current<3000)return; // min 3s between pulls
-    lastPullTime.current=now;
+    if(!coupleMode||!roomCode||isSyncing.current)return false;
+    isSyncing.current=true;
     if(!silent)setSyncStatus("syncing");
     const cloud=await cloudPull(roomCode);
-    if(cloud&&cloud.data&&cloud.updated_by&&cloud.updated_by!==(profile.name||"Moi")){
-      // Check if cloud is newer than our last push
-      const cloudTime=new Date(cloud.updated_at||0).getTime();
-      if(cloudTime>lastPushTime.current){
-        ignoreNextSave.current=true;
-        applyData(cloud.data);saveD(cloud.data);
-        setLastSyncBy(cloud.updated_by);
-        if(!silent)toast("🔄 "+cloud.updated_by+" a modifié");
-      }
-    }
+    isSyncing.current=false;
+    if(!cloud||!cloud.data){setSyncStatus("synced");return false;}
+    // Skip if we already saw this version
+    const cloudStamp=cloud.updated_at||"";
+    if(cloudStamp===lastSeenCloud.current){setSyncStatus("synced");return false;}
+    // Skip if WE were the last to update
+    const myName=profile.name||"Moi";
+    if(cloud.updated_by===myName){lastSeenCloud.current=cloudStamp;setSyncStatus("synced");return false;}
+    // Apply partner's changes
+    lastSeenCloud.current=cloudStamp;
+    skipNextPush.current=true;
+    applyData(cloud.data);saveD(cloud.data);
+    setLastSyncBy(cloud.updated_by||"Partenaire");
     setSyncStatus("synced");
+    if(!silent)toast("🔄 Données de "+(cloud.updated_by||"partenaire")+" appliquées");
+    return true;
   },[coupleMode,roomCode,profile.name]);
 
+  // ── Push local data to cloud ──
+  const pushToCloud=useCallback(async()=>{
+    if(!coupleMode||!roomCode||isSyncing.current)return;
+    isSyncing.current=true;
+    const blob=getSharedBlob();
+    const ok=await cloudPush(roomCode,blob,profile.name||"Moi");
+    isSyncing.current=false;
+    if(ok)lastSeenCloud.current=new Date().toISOString();
+    setSyncStatus(ok?"synced":"error");
+  },[coupleMode,roomCode,profile.name]);
+
+  // ── Manual sync button: PULL first (get partner changes), then PUSH ──
+  const manualSync=useCallback(async()=>{
+    if(!coupleMode||!roomCode){toast("Mode couple non activé","info");return;}
+    setSyncStatus("syncing");
+    // Pull first = partner's data wins if they changed something
+    const gotNew=await pullFromCloud(false);
+    // Then push our (potentially updated) state
+    if(!gotNew){
+      await pushToCloud();
+      toast("✅ Synchronisé");
+    }
+  },[coupleMode,roomCode,pullFromCloud,pushToCloud]);
+
+  // Auto-sync on foreground return
   useEffect(()=>{
     if(!coupleMode||!roomCode)return;
-    const onVisible=()=>{if(document.visibilityState==="visible")pullFromCloud(false);};
+    const onVisible=()=>{if(document.visibilityState==="visible")pullFromCloud(true);};
     document.addEventListener("visibilitychange",onVisible);
     return()=>document.removeEventListener("visibilitychange",onVisible);
   },[coupleMode,roomCode,pullFromCloud]);
 
-  // Auto-poll every 10s when couple mode is on
+  // Auto-poll every 15s (silent)
   useEffect(()=>{
     if(!coupleMode||!roomCode)return;
-    const iv=setInterval(()=>pullFromCloud(true),10000);
+    const iv=setInterval(()=>pullFromCloud(true),15000);
     return()=>clearInterval(iv);
   },[coupleMode,roomCode,pullFromCloud]);
 
-  // Pull-to-refresh touch handler (document-level for reliability on iOS)
-  useEffect(()=>{
-    if(!coupleMode)return;
-    let startY=0;let curPull=0;
-    const onStart=(e)=>{if(document.documentElement.scrollTop<10)startY=e.touches[0].clientY;else startY=0;};
-    const onMove=(e)=>{if(startY===0)return;const dy=e.touches[0].clientY-startY;if(dy>15&&document.documentElement.scrollTop<10){curPull=Math.min(120,dy);setPullY(curPull);}};
-    const onEnd=()=>{if(curPull>80)manualSync();setPullY(0);startY=0;curPull=0;};
-    document.addEventListener("touchstart",onStart,{passive:true});
-    document.addEventListener("touchmove",onMove,{passive:true});
-    document.addEventListener("touchend",onEnd,{passive:true});
-    return()=>{document.removeEventListener("touchstart",onStart);document.removeEventListener("touchmove",onMove);document.removeEventListener("touchend",onEnd);};
-  },[coupleMode]);
-
-  // Persistence + Couple Sync (loop-proof)
-  const applyData=(d)=>{if(d.crypto)setCrypto(d.crypto);if(d.stocks)setStocks(d.stocks);if(d.subs)setSubs(d.subs);if(d.expenses)setExpenses(d.expenses);if(d.goals)setGoals(d.goals);if(d.re)setRE(d.re);if(d.income)setIncome(d.income);if(d.recurring)setRecurring(d.recurring);if(d.monthlyBudget)setMonthlyBudget(d.monthlyBudget);if(d.dark!==undefined)setDark(d.dark);if(d.alerts)setAlerts(d.alerts);if(d.nwHistory)setNwHistory(d.nwHistory);if(d.dashCards)setDashCards(d.dashCards);if(d.catBudgets)setCatBudgets(d.catBudgets);if(d.currency)setCurrency(d.currency);if(d.profile)setProfile(d.profile);};
-  const getDataBlob=()=>({crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile});
-  const ignoreNextSave=useRef(false);
-  const lastPushTime=useRef(0);
+  // ── Data helpers ──
+  const applyData=(d)=>{if(d.crypto)setCrypto(d.crypto);if(d.stocks)setStocks(d.stocks);if(d.subs)setSubs(d.subs);if(d.expenses)setExpenses(d.expenses);if(d.goals)setGoals(d.goals);if(d.re)setRE(d.re);if(d.income)setIncome(d.income);if(d.recurring)setRecurring(d.recurring);if(d.monthlyBudget)setMonthlyBudget(d.monthlyBudget);if(d.alerts)setAlerts(d.alerts);if(d.nwHistory)setNwHistory(d.nwHistory);if(d.dashCards)setDashCards(d.dashCards);if(d.catBudgets)setCatBudgets(d.catBudgets);};
+  // Shared blob: only user data, NOT live prices, NOT personal UI prefs
+  const getSharedBlob=()=>({crypto:crypto.map(c=>({...c,price:0,sparkline:[]})),stocks:stocks.map(s=>({...s,price:0,history:[]})),subs,expenses,goals,re,income,recurring,monthlyBudget,alerts,nwHistory,dashCards,catBudgets});
+  const getFullBlob=()=>({crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile});
 
   // Load on mount
   useEffect(()=>{(async()=>{
@@ -219,8 +236,12 @@ function FinanceApp(){
     setDataLoaded(true);
   })();},[]);
 
-  // Save locally + push to cloud (with anti-loop guard)
-  const svT=useRef(null);useEffect(()=>{if(!dataLoaded)return;if(ignoreNextSave.current){ignoreNextSave.current=false;return;}if(svT.current)clearTimeout(svT.current);svT.current=setTimeout(async()=>{const blob=getDataBlob();await saveD(blob);if(coupleMode&&roomCode){const ok=await cloudPush(roomCode,blob,profile.name||"Moi");lastPushTime.current=Date.now();setSyncStatus(ok?"synced":"error");}},800);},[crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile,dataLoaded,coupleMode,roomCode]);
+  // Save locally always. Push to cloud only when user changes data (not price updates, not remote apply).
+  const svT=useRef(null);const userDataDeps=[subs,expenses,goals,re,income,recurring,monthlyBudget,alerts,nwHistory,dashCards,catBudgets];
+  // Save everything locally (including live prices for offline use)
+  useEffect(()=>{if(!dataLoaded)return;if(svT.current)clearTimeout(svT.current);svT.current=setTimeout(()=>saveD(getFullBlob()),500);},[crypto,stocks,subs,expenses,goals,re,income,recurring,monthlyBudget,dark,alerts,nwHistory,dashCards,catBudgets,currency,profile,dataLoaded]);
+  // Push to cloud only when user-editable data changes (not live prices)
+  const cloudT=useRef(null);useEffect(()=>{if(!dataLoaded||!coupleMode||!roomCode)return;if(skipNextPush.current){skipNextPush.current=false;return;}if(cloudT.current)clearTimeout(cloudT.current);cloudT.current=setTimeout(()=>pushToCloud(),1000);},[...userDataDeps,dataLoaded,coupleMode,roomCode]);
 
   // Couple actions
   const testConnection=async()=>{
@@ -240,7 +261,7 @@ function FinanceApp(){
     if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé Supabase","error");return;}
     _sb=null;const sb=getSB(sbUrl,sbKey);
     if(!sb){toast("❌ Impossible de se connecter. Recharge la page.","error");return;}
-    const code=genRoomCode();const blob=getDataBlob();
+    const code=genRoomCode();const blob=getSharedBlob();
     try{
       const{error}=await sb.from("rooms").insert({code,data:blob,updated_by:profile.name||"Créateur"});
       if(error){toast("❌ "+error.message,"error");return;}
@@ -263,19 +284,6 @@ function FinanceApp(){
     setCoupleMode(false);setRoomCode("");setSyncStatus("off");setLastSyncBy("");
     saveCouple({url:sbUrl,key:sbKey,code:"",active:false,partner:""});
     toast("Déconnecté du mode couple","info");
-  };
-  const manualSync=async()=>{
-    if(!coupleMode||!roomCode){toast("Mode couple non activé","info");return;}
-    setSyncStatus("syncing");
-    // Push first
-    const blob=getDataBlob();
-    const pushOk=await cloudPush(roomCode,blob,profile.name||"Moi");
-    lastPushTime.current=Date.now();
-    // Then pull
-    lastPullTime.current=0; // force pull
-    await pullFromCloud(false);
-    setSyncStatus(pushOk?"synced":"error");
-    if(pushOk)toast("✅ Synchronisé");
   };
 
   // Currency rates
@@ -546,9 +554,9 @@ function FinanceApp(){
         {!mob&&<div style={{display:"flex",gap:2,background:t.card,borderRadius:10,padding:3,border:`1px solid ${t.border}`}}>{TABS.map(tt=>(<button key={tt.id} onClick={()=>setTab(tt.id)} style={{padding:"7px 12px",borderRadius:8,border:"none",background:tab===tt.id?t.border:"transparent",color:tab===tt.id?t.text:t.text3,fontFamily:"DM Sans",fontSize:12,fontWeight:500,cursor:"pointer"}}>{tt.label}</button>))}</div>}
       </div>
     </div>
-    {/* Pull-to-refresh indicator */}
-    {coupleMode&&pullY>30&&<div style={{position:"fixed",top:60,left:0,right:0,display:"flex",justifyContent:"center",zIndex:80,pointerEvents:"none",transition:"opacity .2s"}}><div style={{background:t.card,border:`1px solid ${t.border}`,borderRadius:20,padding:"8px 16px",display:"flex",alignItems:"center",gap:6,boxShadow:"0 4px 16px rgba(0,0,0,0.3)"}}><span style={{fontSize:16,transform:pullY>80?"rotate(180deg)":"none",transition:"transform .2s"}}>⬇️</span><span style={{color:t.text,fontSize:12,fontWeight:600}}>{pullY>80?"Relâche pour sync":"Tire pour actualiser"}</span></div></div>}
-    <div ref={mainRef} style={{maxWidth:960,margin:"0 auto",padding:mob?"14px 12px":"20px 16px",animation:"slideUp .3s ease"}} key={tab+String(dark)}>{tab==="dashboard"&&renderDash()}{tab==="budget"&&renderBudget()}{tab==="invest"&&renderInvest()}{tab==="goals"&&renderGoals()}{tab==="report"&&renderReport()}</div>
+    {/* Sync bar - visible on couple mode */}
+    {coupleMode&&<div style={{maxWidth:960,margin:"0 auto",padding:"0 12px"}}><button onClick={manualSync} style={{width:"100%",padding:"8px",borderRadius:10,border:`1px solid ${syncStatus==="synced"?t.green+"44":t.orange+"44"}`,background:syncStatus==="synced"?t.green+"11":t.orange+"11",color:syncStatus==="synced"?t.green:t.orange,fontSize:12,fontWeight:600,fontFamily:"DM Sans",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6,marginTop:8}}>{syncStatus==="syncing"?<span style={{animation:"pulse .6s infinite"}}>⟳</span>:"🔄"}{syncStatus==="syncing"?"Synchronisation...":"Appuie pour synchroniser"}{lastSyncBy&&syncStatus==="synced"&&<span style={{color:t.text3,fontWeight:400}}> · {lastSyncBy}</span>}</button></div>}
+    <div style={{maxWidth:960,margin:"0 auto",padding:mob?"14px 12px":"20px 16px",animation:"slideUp .3s ease"}} key={tab+String(dark)}>{tab==="dashboard"&&renderDash()}{tab==="budget"&&renderBudget()}{tab==="invest"&&renderInvest()}{tab==="goals"&&renderGoals()}{tab==="report"&&renderReport()}</div>
     <div style={{position:"fixed",bottom:mob?90:30,right:mob?16:30,zIndex:90,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>{showFAB&&<div style={{display:"flex",flexDirection:"column",gap:6,animation:"fabPop .2s ease"}}>{QCATS.map(cat=>(<button key={cat} onClick={()=>quickAddExp(cat)} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 16px",borderRadius:12,background:t.card,border:`1px solid ${t.border}`,color:t.text,fontSize:13,fontFamily:"DM Sans",cursor:"pointer",boxShadow:"0 4px 16px rgba(0,0,0,0.2)"}}><span style={{fontSize:16}}>{CI[cat]}</span>{cat}</button>))}</div>}<button onClick={()=>setShowFAB(p=>!p)} style={{width:56,height:56,borderRadius:28,background:"linear-gradient(135deg,#00e5a0,#00b4d8)",border:"none",color:"#0d1117",fontSize:24,cursor:"pointer",boxShadow:"0 4px 20px rgba(0,229,160,0.3)",display:"flex",alignItems:"center",justifyContent:"center",transition:"transform .2s",transform:showFAB?"rotate(45deg)":"none"}}>+</button></div>
     {mob&&<div style={{position:"fixed",bottom:0,left:0,right:0,background:t.card+"ee",borderTop:`1px solid ${t.border}`,display:"flex",justifyContent:"space-around",padding:"6px 0 max(12px,env(safe-area-inset-bottom))",backdropFilter:"blur(16px)",zIndex:100}}>{TABS.map(tt=>(<button key={tt.id} onClick={()=>setTab(tt.id)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,background:"none",border:"none",cursor:"pointer",padding:"4px 6px",minWidth:44}}><span style={{fontSize:17,filter:tab===tt.id?"none":"grayscale(1) opacity(0.4)"}}>{tt.emoji}</span><span style={{fontSize:8,fontWeight:tab===tt.id?600:400,color:tab===tt.id?t.accent:t.text3}}>{tt.label}</span></button>))}</div>}
     <Toast toasts={toasts}/>
