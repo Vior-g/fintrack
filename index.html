@@ -18,7 +18,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 html,body{margin:0;padding:0;overscroll-behavior:none;-webkit-overflow-scrolling:touch}
@@ -59,17 +59,26 @@ function saveCouple(d){try{localStorage.setItem(COUPLE_SK,JSON.stringify(d));}ca
 
 // ── Supabase Sync Engine ──
 let _sb=null;let _channel=null;
-function getSB(url,key){if(_sb)return _sb;if(!url||!key)return null;try{_sb=supabase.createClient(url,key);return _sb;}catch(e){return null;}}
+function getSB(url,key){
+  if(_sb)return _sb;if(!url||!key)return null;
+  try{
+    // Supabase v2 UMD exposes window.supabase with createClient
+    const lib=window.supabase;
+    if(!lib||!lib.createClient){console.error("Supabase lib not loaded");return null;}
+    _sb=lib.createClient(url,key);
+    return _sb;
+  }catch(e){console.error("Supabase init error:",e);return null;}
+}
 
 async function syncToCloud(code,data,who){
   const c=loadCouple();if(!c||!c.url||!c.key||!code)return false;
   const sb=getSB(c.url,c.key);if(!sb)return false;
-  try{const{error}=await sb.from("rooms").upsert({code,data,updated_by:who||"?",updated_at:new Date().toISOString()},{onConflict:"code"});return !error;}catch(e){return false;}
+  try{const{error}=await sb.from("rooms").upsert({code,data,updated_by:who||"?",updated_at:new Date().toISOString()},{onConflict:"code"});if(error)console.error("Sync error:",error.message);return !error;}catch(e){console.error("Sync exception:",e);return false;}
 }
 async function loadFromCloud(code){
   const c=loadCouple();if(!c||!c.url||!c.key||!code)return null;
-  const sb=getSB(c.url,c.key);if(!sb)return null;
-  try{const{data,error}=await sb.from("rooms").select("data,updated_by,updated_at").eq("code",code).single();if(error||!data)return null;return data;}catch(e){return null;}
+  const sb=getSB(c.url,c.key);if(!sb){console.error("No SB client for load");return null;}
+  try{const{data,error}=await sb.from("rooms").select("data,updated_by,updated_at").eq("code",code).single();if(error){console.error("Load error:",error.message);return null;}return data;}catch(e){console.error("Load exception:",e);return null;}
 }
 function subscribeToRoom(code,onChange){
   const c=loadCouple();if(!c||!c.url||!c.key||!code)return null;
@@ -147,7 +156,7 @@ function FinanceApp(){
   const fmtK=n=>{const v=n*cr;return v>=1000?(v/1000).toFixed(1)+"k":v.toFixed(0);};
   const closeM=()=>{setModal(null);setMd({});};
   const ts=()=>new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-  const toast=(msg,type="success")=>{const id=Date.now();setToasts(p=>[...p,{id,msg,bg:type==="success"?t.green+"dd":t.accent2+"dd",color:"#fff"}]);setTimeout(()=>setToasts(p=>p.filter(x=>x.id!==id)),3000);};
+  const toast=(msg,type="success")=>{const id=Date.now();const bg=type==="success"?t.green+"dd":type==="error"?t.red+"dd":t.accent2+"dd";setToasts(p=>[...p,{id,msg,bg,color:"#fff"}]);setTimeout(()=>setToasts(p=>p.filter(x=>x.id!==id)),3000);};
 
   // Online/offline
   useEffect(()=>{const on=()=>setIsOnline(true);const off=()=>setIsOnline(false);window.addEventListener("online",on);window.addEventListener("offline",off);return()=>{window.removeEventListener("online",on);window.removeEventListener("offline",off);};},[]);
@@ -191,20 +200,37 @@ function FinanceApp(){
   },[coupleMode,roomCode,sbUrl,sbKey]);
 
   // Couple actions
+  const testConnection=async()=>{
+    if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé","error");return;}
+    if(!sbUrl.includes("supabase.co")){toast("L'URL doit être https://xxx.supabase.co","error");return;}
+    _sb=null; // force reconnect
+    const sb=getSB(sbUrl,sbKey);
+    if(!sb){toast("❌ Librairie Supabase non chargée — recharge la page","error");return;}
+    try{
+      const{data,error}=await sb.from("rooms").select("code").limit(1);
+      if(error){toast("❌ Erreur: "+error.message,"error");return;}
+      toast("✅ Connexion OK !");
+      saveCouple({url:sbUrl,key:sbKey,code:roomCode,active:coupleMode,partner:partnerName});
+    }catch(e){toast("❌ "+e.message,"error");}
+  };
   const createRoom=async()=>{
     if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé Supabase","error");return;}
-    const code=genRoomCode();const sb=getSB(sbUrl,sbKey);if(!sb){toast("Erreur connexion Supabase","error");return;}
-    const blob=getDataBlob();
-    const{error}=await sb.from("rooms").insert({code,data:blob,updated_by:profile.name||"Créateur"});
-    if(error){toast("Erreur: "+error.message,"error");return;}
-    setRoomCode(code);setCoupleMode(true);saveCouple({url:sbUrl,key:sbKey,code,active:true,partner:partnerName});
-    setSyncStatus("synced");toast("✅ Salon créé : "+code);
+    _sb=null;const sb=getSB(sbUrl,sbKey);
+    if(!sb){toast("❌ Impossible de se connecter. Recharge la page.","error");return;}
+    const code=genRoomCode();const blob=getDataBlob();
+    try{
+      const{error}=await sb.from("rooms").insert({code,data:blob,updated_by:profile.name||"Créateur"});
+      if(error){toast("❌ "+error.message,"error");return;}
+      setRoomCode(code);setCoupleMode(true);saveCouple({url:sbUrl,key:sbKey,code,active:true,partner:partnerName});
+      setSyncStatus("synced");toast("✅ Salon créé : "+code);
+    }catch(e){toast("❌ "+e.message,"error");}
   };
   const joinRoom=async(code)=>{
-    if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé Supabase","error");return;}
+    if(!sbUrl||!sbKey){toast("Remplis l'URL et la clé","error");return;}
     if(!code||code.length<4){toast("Code invalide","error");return;}
+    _sb=null;
     const cloud=await loadFromCloud(code);
-    if(!cloud){toast("Salon introuvable","error");return;}
+    if(!cloud){toast("❌ Salon introuvable. Vérifie le code.","error");return;}
     if(cloud.data)applyData(cloud.data);
     setRoomCode(code);setCoupleMode(true);saveCouple({url:sbUrl,key:sbKey,code,active:true,partner:partnerName});
     setSyncStatus("synced");toast("✅ Rejoint le salon "+code);
@@ -506,6 +532,7 @@ function FinanceApp(){
         <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:14}}><span style={{fontSize:20}}>👫</span><span style={{color:t.text,fontSize:15,fontWeight:700}}>Mode Couple</span>{coupleMode&&<span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"2px 8px",borderRadius:20,background:t.green+"22",fontSize:9,fontFamily:"Space Mono",fontWeight:700,color:t.green}}><span style={{width:5,height:5,borderRadius:"50%",background:t.green,animation:"pulse 1.5s infinite"}}/>Connecté</span>}</div>
         <Fd label="URL Supabase" placeholder="https://xxx.supabase.co" value={sbUrl} onChange={e=>{setSbUrl(e.target.value);_sb=null;}} t={t}/>
         <Fd label="Clé API (anon public)" placeholder="eyJ..." value={sbKey} onChange={e=>{setSbKey(e.target.value);_sb=null;}} t={t}/>
+        <Bt full t={t} onClick={testConnection} style={{marginBottom:14}}>🔌 Tester la connexion</Bt>
         {!coupleMode?(<div>
           <Fd label="Nom du partenaire" placeholder="Marie" value={partnerName} onChange={e=>setPartnerName(e.target.value)} t={t}/>
           <div style={{display:"flex",gap:8,marginBottom:10}}>
